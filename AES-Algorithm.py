@@ -103,7 +103,7 @@ class AES256CTR(EncryptMyData): '''inherits parent classes attributes and method
             result.append(row)
         return result
 
-    def substitute_bytes(self, state): ''' subs block of data in S-Box
+    def substitute_bytes(self, state): ''' subs block of data in S-Box'''
         new_state = []
         for row in state:
             new_state.append([S_BOX[byte] for byte in row])
