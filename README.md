@@ -1,6 +1,6 @@
 # Database Encrypter
 
-A local desktop application that encrypts the text contents of SQLite databases using AES-256 (CTR mode), with a multi-user login system and a simple GUI. Built in Python as my OCR Computer Science NEA (A-Level coursework) at Ark Isaac Newton Academy.
+A local desktop application that encrypts the text contents of SQLite databases using AES-256 (CTR mode), with a multi-user login system and a simple GUI. Built in Python as my OCR Computer Science NEA (A-Level coursework) at my high school
 
 > **Status:** Coursework project. See [Limitations](#limitations) for known security trade-offs.
 
