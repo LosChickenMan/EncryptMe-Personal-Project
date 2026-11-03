@@ -1,7 +1,7 @@
 ''' based on the NIST Framework of the Advanced Ecnryption System, my algorithms took the Linear Algebra and Discrete Mathematics 
 and applied and converted it into proper functions that could be used in python 
 and in my program with actual inputs from the user'''
-
+import os
 class EncryptMyData:  ''' Using OOP and Polymorphism and Inheritance to allow for modularity '''
     def __init__(self):
         self._plaindata = ''
