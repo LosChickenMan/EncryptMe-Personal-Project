@@ -1,0 +1,703 @@
+Below is a GitHub-ready version of the Database Manager section, based on the database development, implementation, debugging and testing sections of your NEA documentation (Iterations 4.1–4.3).
+
+I've structured it as a standalone `README.md` section, using Markdown headings, code-style formatting, tables and clear explanations. It is written to explain the purpose of each component, how the database operates, and how the different methods interact.
+
+The content follows your documented implementation rather than introducing a different database architecture.
+
+# Database Manager (DBMS)
+
+## 1. Overview
+
+The Database Manager is responsible for securely storing, retrieving, managing and maintaining user information and encrypted data throughout the application.
+
+It acts as the connection between the application's encryption algorithms and its persistent storage system. Rather than keeping sensitive information exclusively in temporary memory, the DBMS uses a relational SQLite database to maintain user credentials, encrypted files and system activity.
+
+The Database Manager has four primary responsibilities:
+
+- Database initialisation: Creates the database directory, establishes SQLite connections and initialises the required relational tables.
+- User management: Stores and retrieves user authentication information, including hashed email addresses, hashed passwords and cryptographic salts.
+- Encrypted data management: Stores encrypted file data, associated metadata and the information required to retrieve previously encrypted records.
+- Activity logging: Records user actions and relevant system events to maintain an audit trail.
+
+The system uses Python's built-in `sqlite3` library to communicate with SQLite. This removes the requirement for an external database server and allows the application to maintain local storage on the user's machine.
+
+## 2. Database Architecture
+
+The application uses a relational database structure consisting of three primary tables:
+
+| Table             | Purpose                                                                      |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `users`           | Stores user authentication information and account metadata.                 |
+| `encrypted_items` | Stores encrypted files, associated salts, original binary data and metadata. |
+| `logs`            | Records user activity and system events for auditing purposes.               |
+
+These tables are connected through relational relationships, using primary keys and foreign keys to associate encrypted records and activity logs with their respective users.
+
+### 2.1 Users Table
+
+The `users` table is responsible for maintaining account information.
+
+It stores authentication information in a hashed format rather than retaining users' passwords or email addresses as readable plaintext.
+
+The documented fields include:
+
+| Field         | Description                                                               |
+| ------------- | ------------------------------------------------------------------------- |
+| User ID       | Unique identifier associated with each registered account.                |
+| Email Hash    | SHA-256 hash of the user's email address.                                 |
+| Password Hash | Hashed representation of the user's password.                             |
+| Salt          | Cryptographic salt associated with the user's authentication credentials. |
+| Timestamp     | Records when the account was created.                                     |
+
+Purpose:
+
+- Provides persistent storage for registered accounts.
+- Allows the authentication system to retrieve and verify user credentials.
+- Prevents duplicate accounts through database uniqueness constraints.
+- Protects stored credentials by retaining hashed values rather than plaintext passwords.
+
+The email hash is also used when looking up an existing user, allowing the application to associate an account with its corresponding user ID.
+
+### 2.2 Encrypted Items Table
+
+The `encrypted_items` table is responsible for storing the files and data processed by the encryption algorithms.
+
+Unlike the users table, which focuses on authentication, this table maintains the actual encrypted records and their associated metadata.
+
+The documented fields include:
+
+| Field                | Description                                                 |
+| -------------------- | ----------------------------------------------------------- |
+| Record ID            | Unique identifier assigned to each encrypted item.          |
+| User ID              | Foreign key connecting the encrypted item to its owner.     |
+| Filename             | Original filename associated with the stored file.          |
+| Salt                 | Base64-encoded cryptographic salt used during encryption.   |
+| Original Data        | Original file contents stored as binary data.               |
+| Encrypted Data       | Encrypted representation of the file stored as binary data. |
+| Optional Hash Fields | Additional hash values associated with the stored record.   |
+| Timestamp            | Records when the encrypted item was created.                |
+
+Purpose:
+
+- Maintains persistent storage for encrypted files.
+- Associates every stored record with its respective user.
+- Allows encrypted files to be retrieved using their record IDs.
+- Maintains the metadata required to identify and process stored records.
+- Uses SQLite BLOB storage to accommodate binary file contents.
+
+The database uses binary large objects (BLOBs) to store file contents. This allows files to be represented as raw binary data rather than requiring them to be converted into ordinary text.
+
+### 2.3 Logs Table
+
+The `logs` table maintains an audit trail of activities performed within the application.
+
+Whenever an important operation occurs, the application can record the associated user, action and additional information.
+
+The documented fields include:
+
+| Field     | Description                                              |
+| --------- | -------------------------------------------------------- |
+| Log ID    | Unique identifier for each log entry.                    |
+| User ID   | Foreign key connecting the event to its associated user. |
+| Action    | Describes the operation performed.                       |
+| Details   | Optional additional information about the event.         |
+| Timestamp | Records when the event occurred.                         |
+
+Purpose:
+
+- Provides an activity history for individual users.
+- Allows important database operations to be traced.
+- Supports auditing and investigation of unexpected behaviour.
+- Helps identify failed or unsuccessful operations.
+
+The use of a separate logging table ensures that activity records are maintained independently of the encrypted file data itself.
+
+## 3. Database Initialisation
+
+### Iteration 4.1 – Initialising the relational databases and creating the required tables
+
+The first development stage establishes the database infrastructure required by the application.
+
+The system uses SQLite3 to create and maintain a local database inside a hidden directory within the user's home directory.
+
+The initialisation process is handled by the `init_app_db()` function.
+
+Its responsibilities include:
+
+1. Identifying the location where the application database should be stored.
+2. Checking whether the required parent directory already exists.
+3. Creating the directory if it does not exist.
+4. Establishing a connection to the SQLite database.
+5. Creating the three required tables if they do not already exist.
+6. Establishing the necessary primary key and foreign key relationships.
+7. Committing database changes.
+8. Closing the database connection once initialisation is complete.
+
+The use of `CREATE TABLE IF NOT EXISTS` ensures that the application can initialise the database repeatedly without attempting to recreate tables that already exist.
+
+This is important because the database must remain persistent between application launches.
+
+Why this approach was chosen:
+
+- SQLite provides local relational storage without requiring a separate database server.
+- The hidden application directory keeps database files organised within the user's home directory.
+- Initialising tables automatically reduces manual configuration.
+- Foreign keys help maintain relationships between users, encrypted records and logs.
+- Persistent storage ensures that encrypted records remain available after the application closes.
+
+## 4. Database Management Functions
+
+### Iteration 4.2 – Creating DBMS methods for storing and returning encrypted databases
+
+Once the database structure was established, the next development stage introduced the functions responsible for interacting with its tables.
+
+Three primary functions were developed.
+
+### 4.1 `log_event()`
+
+The `log_event()` function records user activity in the `logs` table.
+
+Parameters:
+
+| Parameter | Description                                      |
+| --------- | ------------------------------------------------ |
+| `user_id` | Identifies the user responsible for the event.   |
+| `action`  | Describes the action being performed.            |
+| `details` | Optional additional information about the event. |
+
+Execution process:
+
+1. Establishes a connection to the SQLite database.
+2. Receives the user ID, action and optional details.
+3. Executes an SQL `INSERT` statement to create a new log record.
+4. Commits the transaction to ensure the record is saved.
+5. Closes the database connection.
+
+Why it is important:
+
+The function provides an audit trail of application activity. This allows the system to maintain a record of operations performed by users and makes it easier to investigate unexpected behaviour.
+
+Separating logging from the other database operations also makes the code more modular and easier to maintain.
+
+### 4.2 `storedata_db()`
+
+The `storedata_db()` function is responsible for saving encrypted files and their associated metadata into the `encrypted_items` table.
+
+It ensures that the information being stored is valid before attempting to insert a new database record.
+
+Parameters:
+
+| Parameter            | Description                                                 |
+| -------------------- | ----------------------------------------------------------- |
+| `user_id`            | Identifies the owner of the encrypted file.                 |
+| `filename`           | Name of the file being stored.                              |
+| `original_data`      | Original file contents represented as bytes.                |
+| `encrypted_data`     | Encrypted file contents represented as bytes.               |
+| `salt_b64`           | Base64-encoded salt associated with the encryption process. |
+| Optional hash values | Additional hash information associated with the record.     |
+
+Execution process:
+
+1. Establishes a connection to the SQLite database.
+2. Receives the information required to store the encrypted item.
+3. Checks that all mandatory parameters have been provided.
+4. Validates the Base64-encoded salt by attempting to decode it.
+5. Executes a parameterised SQL `INSERT` statement.
+6. Stores the filename, user ID, salt, original binary data, encrypted binary data and optional hash values.
+7. Commits the database transaction.
+8. Retrieves and returns the ID of the newly created record.
+9. Closes the database connection.
+
+Why it is important:
+
+The function provides a consistent method of storing encrypted files and their associated metadata.
+
+Using SQLite BLOB fields allows the application to store binary file contents directly, avoiding the need to interpret binary information as ordinary text.
+
+The validation process also helps prevent incomplete or incorrectly formatted records from entering the database.
+
+Returning the newly created record ID allows other parts of the application to reference the stored item without having to search for it manually.
+
+### 4.3 `returndata_db()`
+
+The `returndata_db()` function retrieves previously stored file contents from the database.
+
+It allows the application to retrieve either the encrypted or original representation of a stored file.
+
+Parameters:
+
+| Parameter     | Description                                                     |
+| ------------- | --------------------------------------------------------------- |
+| `record_id`   | Identifies the database record to retrieve.                     |
+| `kind`        | Determines whether the original or encrypted data is requested. |
+| `output_path` | Specifies where the retrieved file should be written.           |
+
+Execution process:
+
+1. Establishes a connection to the SQLite database.
+2. Uses the supplied record ID to locate the corresponding record.
+3. Retrieves the original and encrypted binary data.
+4. Determines which representation is required using the `kind` parameter.
+5. Selects the appropriate BLOB from the database.
+6. Writes the selected binary data to the specified output path.
+7. Closes the database connection.
+
+If the supplied record ID does not correspond to an existing record, the function raises an error rather than attempting to retrieve invalid data.
+
+Why it is important:
+
+Without this function, encrypted files would be permanently stored in the database without a reliable way of accessing them.
+
+It provides a consistent retrieval mechanism and allows the application to distinguish between original and encrypted file contents.
+
+The distinction between these two data types is particularly important because selecting the wrong BLOB could result in incorrect file retrieval or unintended exposure of plaintext data.
+
+## 5. Database Manager Class
+
+### Iteration 4.3 – Creating the DatabaseManager class and final DBMS functions
+
+After developing the individual database functions, the next stage was to introduce a central `DatabaseManager` class.
+
+The class provides a structured interface for managing user-related operations and initialising the database.
+
+Rather than placing all database functionality into a single function, the system separates responsibilities into individual methods. This improves modularity, makes debugging easier and allows other parts of the application to access database functionality through a consistent interface.
+
+### 5.1 `DatabaseManager`
+
+The `DatabaseManager` class acts as the central interface between the application and its relational SQLite database.
+
+Its constructor initialises the database by calling `init_app_db()`. This ensures that the required database structure exists before any operations are performed.
+
+Main responsibilities:
+
+- Initialising the application database.
+- Managing user account records.
+- Providing methods for inserting user information.
+- Retrieving user information using hashed email addresses.
+- Handling database integrity errors.
+- Providing a centralised location for user-related database operations.
+
+### 5.2 Constructor – `__init__()`
+
+The constructor is automatically executed whenever a new `DatabaseManager` object is created.
+
+Its main responsibility is to initialise the database structure by calling `init_app_db()`.
+
+This ensures that the required tables are available before other methods attempt to access them.
+
+Benefits:
+
+- Prevents errors caused by missing database tables.
+- Reduces repeated initialisation code throughout the application.
+- Ensures the database structure is consistent.
+- Makes the database manager easier to integrate with the user interface and encryption classes.
+
+### 5.3 `add_user()`
+
+The `add_user()` method creates a new user record in the `users` table.
+
+It accepts three main pieces of information:
+
+| Parameter       | Description                                         |
+| --------------- | --------------------------------------------------- |
+| `email_hash`    | SHA-256 hash of the user's email address.           |
+| `password_hash` | Hashed representation of the user's password.       |
+| `salt`          | Cryptographic salt associated with the credentials. |
+
+Execution process:
+
+1. Receives the hashed email, hashed password and salt.
+2. Establishes a connection to the SQLite database.
+3. Executes a parameterised SQL `INSERT` statement.
+4. Attempts to create a new user record.
+5. Commits the transaction if the operation succeeds.
+6. Handles any `sqlite3.IntegrityError` exceptions.
+7. Returns a Boolean result indicating whether the operation succeeded.
+
+The use of a parameterised SQL statement is important because it separates user-provided values from the SQL command itself.
+
+This helps protect the database against SQL injection attacks.
+
+The method also handles duplicate email hashes through the database's uniqueness constraints. If an account already exists with the same email hash, SQLite raises an `IntegrityError`, which can be caught and handled without crashing the application.
+
+### 5.4 `get_user_by_email_hash()`
+
+This method retrieves an existing user record using the hashed email address.
+
+Instead of searching for an email address in plaintext, the application uses its corresponding hash to identify the account.
+
+Execution process:
+
+1. Receives the email hash supplied by the authentication system.
+2. Establishes a database connection.
+3. Executes a parameterised SQL `SELECT` query.
+4. Searches the users table for a matching email hash.
+5. Retrieves the associated user record.
+6. Returns the user record to the calling function.
+
+If no matching record is found, the method can return an appropriate empty result for the authentication system to handle.
+
+Why it is important:
+
+This method allows the login system to retrieve the correct user information without exposing plaintext email addresses in the database.
+
+It also provides the user ID required by other database functions, including `log_event()` and `storedata_db()`.
+
+### 5.5 `delete_encrypted_item()`
+
+The `delete_encrypted_item()` function provides a way to remove individual encrypted records from the database.
+
+Unlike the methods contained within the `DatabaseManager` class, this is implemented as a standalone database function.
+
+Parameters:
+
+| Parameter     | Description                                            |
+| ------------- | ------------------------------------------------------ |
+| `record_id`   | Identifies the encrypted record to delete.             |
+| Database path | Optional path specifying the SQLite database location. |
+
+Execution process:
+
+1. Receives the record ID of the item that should be removed.
+2. Establishes a connection to the database.
+3. Executes a parameterised SQL `DELETE` statement.
+4. Checks whether any database rows were affected by the operation.
+5. Commits the transaction if the deletion is successful.
+6. Returns a result indicating whether a record was deleted.
+
+Why it is important:
+
+Deleting individual records allows users to manage their stored encrypted data without having to recreate or rewrite the entire database.
+
+The use of a parameterised query also reduces the risk of SQL injection.
+
+Checking the number of affected rows ensures that the application can distinguish between a successful deletion and an attempt to delete a record that does not exist.
+
+## 6. Database Security and Integrity
+
+Security is an important consideration throughout the DBMS because it handles authentication information and sensitive encrypted data.
+
+Several measures are implemented to improve the reliability and security of database operations.
+
+| Security measure      | Implementation                               | Benefit                                                                  |
+| --------------------- | -------------------------------------------- | ------------------------------------------------------------------------ |
+| Password hashing      | SHA-256 hashing                              | Prevents plaintext passwords from being stored directly.                 |
+| Salt storage          | Cryptographic salt values                    | Supports salted password verification and encryption processes.          |
+| Parameterised queries | SQLite parameter binding                     | Helps prevent SQL injection.                                             |
+| Foreign keys          | Relationships between tables                 | Maintains referential integrity between users, encrypted items and logs. |
+| Unique constraints    | Applied to user identification fields        | Prevents duplicate user records.                                         |
+| Input validation      | Checks required parameters and encoded salts | Prevents incomplete or incorrectly formatted records.                    |
+| Error handling        | `try/except` and SQLite integrity exceptions | Prevents expected database errors from terminating normal execution.     |
+| Transaction commits   | SQLite `commit()`                            | Ensures successful database changes are persisted.                       |
+
+### 6.1 Parameterised SQL Queries
+
+The database manager uses parameterised SQL statements when inserting, retrieving and deleting records.
+
+For example, instead of directly inserting user input into an SQL command, the application passes the values separately through SQLite's parameter binding mechanism.
+
+Conceptually:
+
+```
+cursor.execute(    "INSERT INTO users (email_hash, password_hash, salt) VALUES (?, ?, ?)",    (email_hash, password_hash, salt))
+```
+
+This prevents user input from being interpreted as part of the SQL command.
+
+It is particularly important in an application designed to protect against attacks such as SQL injection.
+
+### 6.2 Referential Integrity
+
+Foreign keys are used to associate records with their respective users.
+
+For example, an encrypted item contains a user ID that references the corresponding user in the `users` table.
+
+This ensures that stored encrypted records have an identifiable owner.
+
+The same principle is applied to the `logs` table, allowing activity records to be associated with the user responsible for them.
+
+### 6.3 Binary Data Storage
+
+The application uses SQLite BLOB fields to store file contents.
+
+A BLOB (Binary Large Object) represents data as raw binary information rather than ordinary text.
+
+This is necessary because encrypted files may contain arbitrary byte sequences that cannot safely be represented as normal text.
+
+The DBMS therefore maintains both original and encrypted binary representations as separate fields.
+
+This allows the retrieval system to select the appropriate representation without modifying the underlying binary information.
+
+## 7. Testing the Database Management System
+
+Testing was carried out after the initial DBMS functions and class had been implemented.
+
+The purpose was to identify logical errors, incorrect database operations and potential failures involving relational integrity.
+
+The tests were performed using a separate Python file, allowing the DBMS to be evaluated independently before being integrated into the main user interface.
+
+This was important because database errors could affect multiple other components, including authentication, encryption, file retrieval and activity logging.
+
+### 7.1 Initial DBMS Testing
+
+The initial tests were designed to determine whether:
+
+- User records could be inserted successfully.
+- Duplicate user records were rejected.
+- Encrypted file information could be stored.
+- Stored records could be retrieved.
+- The correct binary data was returned.
+- Database operations produced the expected results.
+
+The initial testing identified several bugs that required redevelopment.
+
+### 7.2 Debugging `add_user()` – Iteration 4.3.1
+
+Bug identified and corrected
+
+During testing, I discovered an issue with the Boolean values returned by the `add_user()` function.
+
+The function was returning `FALSE` when a user was successfully inserted, while unsuccessful operations involving duplicate email hashes returned an `IntegrityError`.
+
+This caused incorrect results to be interpreted by the rest of the application.
+
+Problems caused:
+
+- Successful registrations could be incorrectly reported as failures.
+- Duplicate records could be interpreted incorrectly.
+- User creation could produce misleading results.
+- Authentication and audit logging could become inconsistent.
+
+Solution:
+
+I corrected the return statements so that successful insertions return `TRUE`, while unsuccessful insertions return `FALSE`.
+
+This ensures that the calling functions receive an accurate indication of whether the user was successfully created.
+
+### 7.3 Debugging `storedata_db()` – Iteration 4.2.1
+
+Bug identified and corrected
+
+During the testing of `storedata_db()`, I discovered that the original and encrypted BLOB values were being inserted into the incorrect database fields.
+
+This was a serious issue because the database relied on the correct classification of the two binary data representations.
+
+Problems caused:
+
+- Encrypted data could be stored in the original data field.
+- Original data could be stored in the encrypted data field.
+- Retrieval operations could return the wrong information.
+- Decryption could fail because the application was receiving an unexpected data representation.
+- Data integrity could be compromised.
+
+Solution:
+
+I switched the two BLOB values so that the original and encrypted data were inserted into their correct database columns.
+
+This restored consistency between the storage and retrieval processes.
+
+### 7.4 Debugging `returndata_db()` – Iteration 4.2.1
+
+Bug identified and corrected
+
+Another issue was discovered in the `returndata_db()` function.
+
+The function was returning the plaintext representation when encrypted data was requested, and vice versa.
+
+This occurred because the conditional expression used to select the appropriate BLOB had its logic reversed.
+
+The original expression was:
+
+```
+data = enc_blob if kind == "original" else orig_blob
+```
+
+Problems caused:
+
+- Encrypted files could be returned as original files.
+- Original files could be returned as encrypted files.
+- Users could receive an incorrect representation of their stored data.
+- Incorrect retrieval could potentially expose plaintext data when encrypted output was expected.
+
+Solution:
+
+I corrected the conditional expression:
+
+```
+data = enc_blob if kind == "encrypted" else orig_blob
+```
+
+The function now selects the encrypted BLOB when the requested type is `"encrypted"` and the original BLOB otherwise.
+
+This ensures that the correct data representation is written to the requested output path.
+
+### 7.5 Debugging `get_user_by_email_hash()` – Iteration 4.3.1
+
+Bug identified and corrected
+
+During further testing, I discovered that `get_user_by_email_hash()` was returning an incorrect value.
+
+The function was expected to retrieve the complete user record but was only returning the email hash field.
+
+This caused problems when the rest of the application attempted to access the user's ID.
+
+For example:
+
+```
+email_hash = "test_email_hash"user_id = "t"
+```
+
+Instead of retrieving the complete user record, the function returned the first character of the email hash.
+
+Problems caused:
+
+- Incorrect user IDs were passed to other database functions.
+- Activity logs could be associated with the wrong identifier.
+- Encrypted records could be stored against an invalid user ID.
+- Downstream database operations could become inconsistent.
+- Data corruption could occur without necessarily producing an immediate runtime error.
+
+Solution:
+
+I changed the return statement from:
+
+```
+return user[1]
+```
+
+to:
+
+```
+return user
+```
+
+This ensures that the complete user record is returned rather than an individual field.
+
+The correction allows the calling function to access the required user information, including the associated user ID.
+
+## 8. Evaluation of Database Testing
+
+Following the debugging process, the database management functions were redeveloped and tested to ensure that they behaved as intended.
+
+The four identified issues were corrected:
+
+| Function                   | Problem identified                                               | Redevelopment                                               |
+| -------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| `add_user()`               | Incorrect Boolean return values                                  | Corrected success and failure returns.                      |
+| `storedata_db()`           | Original and encrypted BLOBs stored in incorrect fields          | Switched the BLOB assignments.                              |
+| `returndata_db()`          | Incorrect data representation returned                           | Corrected the conditional selection.                        |
+| `get_user_by_email_hash()` | Returned an individual field instead of the complete user record | Changed the return statement to return the complete record. |
+
+These corrections improved the reliability of the DBMS and ensured that the database functions could communicate correctly with the rest of the application.
+
+In particular, correcting the BLOB storage and retrieval functions was essential because incorrect data classification could result in failed decryption or unintended exposure of plaintext information.
+
+## 9. Future Improvements
+
+Although the database manager successfully implements its core functionality, several improvements could increase its performance, scalability and reliability.
+
+### 9.1 Implementing ACID Principles
+
+ACID stands for:
+
+| Principle   | Description                                                                   |
+| ----------- | ----------------------------------------------------------------------------- |
+| Atomicity   | Ensures that a transaction either completes entirely or is rolled back.       |
+| Consistency | Ensures that database constraints and relationships remain valid.             |
+| Isolation   | Prevents concurrent transactions from interfering with one another.           |
+| Durability  | Ensures committed changes remain saved, including after unexpected shutdowns. |
+
+Applying these principles consistently across database operations would improve reliability and reduce the likelihood of partially completed operations.
+
+### 9.2 Database Indexing
+
+Indexes could be introduced on frequently queried columns, particularly:
+
+- User IDs in the `encrypted_items` table.
+- User IDs in the `logs` table.
+- Creation timestamps used when retrieving records.
+- Email hashes used during authentication.
+
+Without indexing, SQLite may need to scan a large proportion of a table to locate a particular record.
+
+Introducing indexes would allow the database to locate frequently requested information more efficiently as the number of stored records increases.
+
+### 9.3 Reusing Database Connections
+
+Currently, individual functions establish and close their own SQLite connections.
+
+An improvement would be to introduce a reusable database connection or connection-management mechanism.
+
+This would reduce the overhead associated with repeatedly establishing database connections and could improve performance during frequent database operations.
+
+### 9.4 Reducing BLOB Storage
+
+Another possible improvement would be to store large encrypted files directly on the filesystem rather than keeping every binary object inside SQLite.
+
+The database could instead store the file path and associated metadata.
+
+This would help prevent the SQLite database from growing excessively and could improve retrieval performance when managing large files.
+
+### 9.5 Write-Ahead Logging (WAL)
+
+SQLite's Write-Ahead Logging mode could also be enabled to improve concurrency.
+
+WAL allows readers to access the database while a write transaction is taking place, reducing some forms of read/write contention.
+
+This could improve responsiveness when multiple database operations occur close together.
+
+## 10. Conclusion
+
+The Database Manager successfully provides the persistent storage infrastructure required by the application.
+
+Through the implementation of SQLite and a relational database structure, the system can maintain user accounts, encrypted file records and activity logs independently.
+
+The development process was divided into three iterations:
+
+1. Iteration 4.1 – Database Initialisation: Established the SQLite database and created the three required relational tables.
+2. Iteration 4.2 – Database Functions: Implemented methods for recording activity, storing encrypted files and retrieving stored information.
+3. Iteration 4.3 – Database Manager Class: Introduced the central `DatabaseManager` class, user management methods and record deletion functionality.
+
+Testing identified several logical errors involving Boolean return values, BLOB assignments, data retrieval and user record selection. These were corrected through systematic debugging and redevelopment.
+
+Overall, the DBMS provides the application with a structured and maintainable method of managing sensitive information while supporting the encryption and authentication components.
+
+Future improvements such as database indexing, more consistent ACID transaction handling, connection reuse and WAL configuration could further improve its efficiency and scalability.
+
+## 11. Project Structure
+
+The database manager is designed to operate alongside the encryption algorithms and user interface.
+
+A simplified representation of its position within the application is:
+
+```
+Database-Encrypter/
+│
+├── encryption/
+│   └── crypto.py
+│       ├── SHA-256
+│       ├── Salt Generation
+│       └── AES-256-CTR
+│
+├── database/
+│   ├── database_manager.py
+│   │   ├── init_app_db()
+│   │   ├── log_event()
+│   │   ├── storedata_db()
+│   │   ├── returndata_db()
+│   │   ├── delete_encrypted_item()
+│   │   └── DatabaseManager
+│   │       ├── __init__()
+│   │       ├── add_user()
+│   │       └── get_user_by_email_hash()
+│   │
+│   └── application.db
+│       ├── users
+│       ├── encrypted_items
+│       └── logs
+│
+└── frontend/
+    └── user_interface.py
+```
+
+
